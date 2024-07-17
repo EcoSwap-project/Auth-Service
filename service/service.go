@@ -68,15 +68,27 @@ func (s *AuthService) DeleteUser(ctx context.Context, req *pb.DeleteUserRequest)
 }
 
 func (s *AuthService) ResetPassword(ctx context.Context, req *pb.ResetPasswordRequest) (*pb.ResetPasswordResponse, error)  {
-	return nil, nil
+	user ,err := s.repo.ResetPassword(req)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 func (s *AuthService) RefreshToken(ctx context.Context, req *pb.RefreshTokenRequest) (*pb.RefreshTokenResponse, error)  {
-	return nil, nil
+	user ,err := s.repo.RefreshToken(req)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 func (s *AuthService) Logout(ctx context.Context, req *pb.LogoutRequest) (*pb.LogoutResponse, error)  {
-	return nil, nil	
+	user ,err := s.repo.Logout(req)
+	if err != nil {
+		return nil, err
+	}
+		return user, nil	
 }
 
 func (s *AuthService) AddEcoPoints(ctx context.Context, req *pb.AddEcoPointsRequest) (*pb.AddEcoPointsResponse, error) {
@@ -96,7 +108,11 @@ func (s *AuthService) GetEcoPoints(ctx context.Context, req *pb.EcoPointsRequest
 }
 
 func (s *AuthService) GetEcoPointsHistory(ctx context.Context, req *pb.GetEcoPointsHistoryRequest) (*pb.EcoPointsHistoryResponse, error) {
-	return nil, nil
+	user, err := s.repo.GetEcoPointsHistory(req)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 

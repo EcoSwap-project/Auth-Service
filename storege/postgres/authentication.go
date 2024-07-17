@@ -3,6 +3,9 @@ package postgres
 import (
 	user "authentication_service/genproto/authentication_service"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"database/sql"
@@ -116,8 +119,6 @@ func (r *UserRepo) GetUsers(req *user.UsersListRequest) (*user.UsersListResponse
 	if req.EcoPoints != 0 {
 		query += " AND eco_points = $4"
 	}
-	
-
 
 	rows, err := r.db.Query(query, req.Username, req.Id, req.FullName, req.EcoPoints)
 	if err != nil {
@@ -127,7 +128,7 @@ func (r *UserRepo) GetUsers(req *user.UsersListRequest) (*user.UsersListResponse
 	var users []*user.UsersListRequest
 	for rows.Next() {
 		var u user.UsersListRequest
-		err := rows.Scan(&u.Id, &u.Username,  &u.FullName, &u.EcoPoints)
+		err := rows.Scan(&u.Id, &u.Username, &u.FullName, &u.EcoPoints)
 		if err != nil {
 			return nil, err
 		}
@@ -144,11 +145,10 @@ func (r *UserRepo) GetUsers(req *user.UsersListRequest) (*user.UsersListResponse
 	return &user.UsersListResponse{
 		Users: users,
 		Total: int32(total),
-		Page:  (int32(total)/10 )+ 1,
+		Page:  (int32(total) / 10) + 1,
 		Limit: 10,
 	}, nil
 }
-
 
 func (r *UserRepo) DeleteProfile(req *user.DeleteUserRequest) (*user.DeleteUserResponse, error) {
 	query := `
@@ -161,16 +161,21 @@ func (r *UserRepo) DeleteProfile(req *user.DeleteUserRequest) (*user.DeleteUserR
 	return &user.DeleteUserResponse{Deleted: true}, nil
 }
 
-func (r *UserRepo) ResetPassword(req *user.ResetPasswordRequest) (*user.ResetPasswordResponse, error)  {
+func (r *UserRepo) ResetPassword(req *user.ResetPasswordRequest) (*user.ResetPasswordResponse, error) {
+	_, err := r.db.Exec("UPDATE users SET password= $1 WHERE email = $2 AND deleted_at IS NULL", "new_password", req.Email)
+	if err != nil {
+		log.Printf("Error in ResetPassword: %v", err)
+		return nil, err
+	}
+	return &user.ResetPasswordResponse{Message: "Password reset successfully"}, nil
+}
+
+func (r *UserRepo) RefreshToken(req *user.RefreshTokenRequest) (*user.RefreshTokenResponse, error) {
 	return nil, nil
 }
 
-func (r *UserRepo) RefreshToken(req *user.RefreshTokenRequest) (*user.RefreshTokenResponse, error)  {
-	return nil, nil
-}
-
-func (r *UserRepo) Logout(req *user.LogoutRequest) (*user.LogoutResponse, error)  {
-	return nil, nil	
+func (r *UserRepo) Logout(req *user.LogoutRequest) (*user.LogoutResponse, error) {
+	return &user.LogoutResponse{Message: "User logged out successfully"}, nil
 }
 
 func (r *UserRepo) AddEcoPoints(req *user.AddEcoPointsRequest) (*user.AddEcoPointsResponse, error) {
@@ -180,7 +185,7 @@ func (r *UserRepo) AddEcoPoints(req *user.AddEcoPointsRequest) (*user.AddEcoPoin
 	`
 	var res user.AddEcoPointsResponse
 	res.AddedPoints = req.Points
-	err := r.db.QueryRow(query, req.Points, req.Reason, req.UserId).Scan(&res.UserId, &res.EcoPoints, &res.Reason, &res.Timestamp,)
+	err := r.db.QueryRow(query, req.Points, req.Reason, req.UserId).Scan(&res.UserId, &res.EcoPoints, &res.Reason, &res.Timestamp)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +197,7 @@ func (r *UserRepo) GetEcoPoints(req *user.EcoPointsRequest) (*user.EcoPointsResp
 		SELECT id, eco_points,  update_at FROM users WHERE id = $1 and deleted_at is null
 	`
 	var res user.EcoPointsResponse
-	err := r.db.QueryRow(query, req.UserId).Scan(&res.UserId, &res.EcoPoints, &res.LastUpdated) 
+	err := r.db.QueryRow(query, req.UserId).Scan(&res.UserId, &res.EcoPoints, &res.LastUpdated)
 	if err != nil {
 		return nil, err
 	}
@@ -200,10 +205,65 @@ func (r *UserRepo) GetEcoPoints(req *user.EcoPointsRequest) (*user.EcoPointsResp
 }
 
 func (r *UserRepo) GetEcoPointsHistory(req *user.GetEcoPointsHistoryRequest) (*user.EcoPointsHistoryResponse, error) {
-	return nil, nil
-}
+	var (
+		params = make(map[string]interface{})
+		arr    []interface{}
+	)
+	filter := ""
 
+	if req.Page > 0 {
+		params["page"] = req.Page
+		filter += " OFFSET :page"
+	}
+	if req.Limit > 0 {
+		params["limit"] = req.Limit
+		filter += " LIMIT :limit"
+	}
+
+	query := "SELECT id, points, reason, timestamp FROM eco_points_history WHERE user_id = $1" + filter
+	query, arr = ReplaceQueryParams(query, params)
+	rows, err := r.db.Query(query, arr...)
+	if err != nil {
+		log.Printf("Error in GetEcoPointsHistory: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []*user.EcoPointsHistoryItem
+	for rows.Next() {
+		var ecoPointsHistory user.EcoPointsHistoryItem
+		err := rows.Scan(&ecoPointsHistory.Id, &ecoPointsHistory.Points, &ecoPointsHistory.Reason, &ecoPointsHistory.Timestamp)
+		if err != nil {
+			log.Printf("Error in GetEcoPointsHistory (row scan): %v", err)
+			return nil, err
+		}
+		history = append(history, &ecoPointsHistory)
+	}
+	return &user.EcoPointsHistoryResponse{
+		History: history,
+		Total:   int32(len(history)),
+		Page:    req.Page,
+		Limit:   req.Limit,
+	}, nil
+}
 
 func HashPassword(password string) ([]byte, error) {
 	return bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+}
+
+func ReplaceQueryParams(namedQuery string, params map[string]interface{}) (string, []interface{}) {
+	var (
+		i    int = 1
+		args []interface{}
+	)
+
+	for k, v := range params {
+		if k != "" && strings.Contains(namedQuery, ":"+k) {
+			namedQuery = strings.ReplaceAll(namedQuery, ":"+k, "$"+strconv.Itoa(i))
+			args = append(args, v)
+			i++
+		}
+	}
+
+	return namedQuery, args
 }
